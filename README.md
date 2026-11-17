@@ -8,7 +8,15 @@ A standalone Python program that ranks Instagram hashtags by estimated opportuni
 python3 hashtag_research.py "street photography"
 ```
 
-The program creates `hashtag_results.csv` and `hashtag_results.html` in the current directory.
+The program exports ranked research data to `hashtag_results.csv` and creates an HTML report at `hashtag_results.html` in the current directory.
+
+To choose a CSV filename:
+
+```bash
+python3 hashtag_research.py "street photography" --csv street_tags.csv
+```
+
+The CSV contains `rank`, `hashtag`, `posts`, `engagement`, `trend`, `opportunity`, `tier`, and `related_to` columns. The older `--output` option is also supported as an alias for `--csv`.
 
 ## Use your own data
 
@@ -33,7 +41,7 @@ The built-in data is only demo data. The program does not scrape Instagram. Use 
 --min-posts NUMBER   Minimum post count
 --max-posts NUMBER   Maximum post count
 --limit NUMBER       Maximum number of results
---output PATH        CSV output path
+--csv PATH           CSV export path (`--output` is also supported)
 --html PATH          HTML report path
 ```
 

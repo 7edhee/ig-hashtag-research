@@ -115,7 +115,7 @@ def main() -> int:
     parser.add_argument("--min-posts", type=int, default=1_000)
     parser.add_argument("--max-posts", type=int, default=5_000_000)
     parser.add_argument("--limit", type=int, default=30)
-    parser.add_argument("--output", type=Path, default=Path("hashtag_results.csv"))
+    parser.add_argument("--csv", "--output", dest="csv_path", type=Path, default=Path("hashtag_results.csv"), help="Export ranked results to this CSV file")
     parser.add_argument("--html", type=Path, default=Path("hashtag_results.html"))
     args = parser.parse_args()
 
@@ -129,14 +129,15 @@ def main() -> int:
         print("No matching hashtags. Try a broader topic or wider post-count range.")
         return 0
 
-    save_csv(args.output, results)
+    save_csv(args.csv_path, results)
     save_html(args.html, results, args.seed)
     print(f"Found {len(results)} hashtags for '{args.seed}'\n")
     print(f"{'#':>3}  {'HASHTAG':<28} {'POSTS':>12} {'ENG%':>6} {'TREND':>6} {'SCORE':>6}  TIER")
     print("-" * 82)
     for index, row in enumerate(results, 1):
         print(f"{index:>3}  {row['hashtag']:<28} {row['posts']:>12,} {row['engagement']:>6.1f} {row['trend']:>6.1f} {row['opportunity']:>6.1f}  {row['tier']}")
-    print(f"\nSaved: {args.output} and {args.html}")
+    print(f"\nCSV exported to: {args.csv_path}")
+    print(f"HTML report exported to: {args.html}")
     return 0
 
 
