@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Instagram hashtag research tool.
+"""Standalone Instagram hashtag research tool.
 
-Works with a CSV containing hashtag metrics. It does not scrape Instagram.
-Expected columns: hashtag, posts, engagement, trend, related_to
+Uses embedded demo data by default. For real research, pass an authorized
+metrics CSV with --data. The tool does not scrape Instagram.
 """
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 
 @dataclass
@@ -26,118 +25,117 @@ class Hashtag:
 
     @property
     def normalized(self) -> str:
-        value = self.hashtag.strip().lower()
-        return value if value.startswith("#") else f"#{value}"
+        tag = self.hashtag.strip().lower()
+        return tag if tag.startswith("#") else f"#{tag}"
 
 
-def parse_number(value: str) -> float:
-    value = str(value).strip().lower().replace(",", "")
+DEMO_DATA = [
+    Hashtag("streetphotography", 4_800_000, 6.2, 54, "street photography"),
+    Hashtag("streetphotograph", 1_200_000, 8.1, 72, "street photography"),
+    Hashtag("urbanphotography", 3_500_000, 5.9, 61, "street photography"),
+    Hashtag("urbanphotographer", 420_000, 9.4, 78, "street photography"),
+    Hashtag("cityphotography", 980_000, 7.8, 68, "street photography"),
+    Hashtag("nightstreetphotography", 185_000, 10.2, 88, "street photography"),
+    Hashtag("streetphotoart", 74_000, 12.5, 91, "street photography"),
+    Hashtag("streetportrait", 215_000, 8.8, 76, "street photography"),
+    Hashtag("photowalk", 390_000, 9.1, 83, "street photography"),
+    Hashtag("minimalstreet", 28_000, 14.3, 95, "street photography"),
+    Hashtag("travelphotography", 9_800_000, 4.2, 39, "travel photography"),
+    Hashtag("mobilephotography", 2_700_000, 5.4, 48, "photography"),
+]
+
+
+def number(value: str) -> float:
+    text = str(value).strip().lower().replace(",", "")
     multipliers = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
-    if value and value[-1] in multipliers:
-        return float(value[:-1]) * multipliers[value[-1]]
-    return float(value or 0)
+    if text and text[-1] in multipliers:
+        return float(text[:-1]) * multipliers[text[-1]]
+    return float(text or 0)
 
 
 def load_csv(path: Path) -> list[Hashtag]:
-    with path.open(newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
+    with path.open(newline="", encoding="utf-8-sig") as file:
+        reader = csv.DictReader(file)
         required = {"hashtag", "posts", "engagement", "trend"}
         missing = required - set(reader.fieldnames or [])
         if missing:
-            raise ValueError(f"{path} is missing columns: {', '.join(sorted(missing))}")
-        rows = []
-        for row in reader:
-            tag = row.get("hashtag", "").strip()
-            if not tag:
-                continue
-            rows.append(Hashtag(tag, int(parse_number(row["posts"])), float(row["engagement"]), float(row["trend"]), row.get("related_to", "")))
-        return rows
+            raise ValueError(f"CSV missing columns: {', '.join(sorted(missing))}")
+        return [
+            Hashtag(row["hashtag"], int(number(row["posts"])), float(row["engagement"]), float(row["trend"]), row.get("related_to", ""))
+            for row in reader if row.get("hashtag", "").strip()
+        ]
 
 
-def tokens(text: str) -> set[str]:
-    return {x for x in re.findall(r"[a-z0-9]+", text.lower()) if len(x) > 2}
+def words(text: str) -> set[str]:
+    return {word for word in re.findall(r"[a-z0-9]+", text.lower()) if len(word) > 2}
 
 
-def score(tag: Hashtag, seed: str) -> tuple[float, str]:
-    # Opportunity favors growing, engaged niches over extremely saturated tags.
-    volume = min(100.0, (tag.posts / 500_000) ** 0.5 * 100) if tag.posts else 0
-    saturation_penalty = min(35.0, (tag.posts / 10_000_000) ** 0.5 * 35) if tag.posts else 0
-    engagement_score = min(100.0, max(0.0, tag.engagement) * 10)
-    trend_score = min(100.0, max(0.0, tag.trend))
-    relevance = 100.0 if seed.lower().strip("#") in tag.normalized else 0.0
-    overlap = len(tokens(seed) & tokens(tag.normalized))
-    relevance = max(relevance, min(100.0, overlap * 45.0))
-    opportunity = 0.35 * engagement_score + 0.30 * trend_score + 0.20 * relevance + 0.15 * volume - saturation_penalty
-    if opportunity >= 70:
-        tier = "High opportunity"
-    elif opportunity >= 45:
-        tier = "Good test"
-    else:
-        tier = "Niche / experimental"
-    return round(max(0.0, min(100.0, opportunity)), 1), tier
+def rank_tag(tag: Hashtag, seed: str) -> tuple[float, str]:
+    volume = min(100, (tag.posts / 500_000) ** 0.5 * 100) if tag.posts else 0
+    saturation = min(35, (tag.posts / 10_000_000) ** 0.5 * 35) if tag.posts else 0
+    engagement = min(100, max(0, tag.engagement) * 10)
+    trend = min(100, max(0, tag.trend))
+    overlap = len(words(seed) & words(f"{tag.normalized} {tag.related_to}"))
+    relevance = min(100, overlap * 45)
+    opportunity = 0.35 * engagement + 0.30 * trend + 0.20 * relevance + 0.15 * volume - saturation
+    tier = "High opportunity" if opportunity >= 70 else "Good test" if opportunity >= 45 else "Niche / experimental"
+    return round(max(0, min(100, opportunity)), 1), tier
 
 
-def research(rows: Iterable[Hashtag], seed: str, min_posts: int, max_posts: int, limit: int) -> list[dict]:
-    seed_terms = tokens(seed)
+def research(data: list[Hashtag], seed: str, minimum: int, maximum: int, limit: int) -> list[dict]:
+    seed_words = words(seed)
     results = []
-    for tag in rows:
-        if not (min_posts <= tag.posts <= max_posts):
-            continue
-        haystack = f"{tag.normalized} {tag.related_to}".lower()
-        if seed_terms and not any(term in haystack for term in seed_terms):
-            continue
-        opportunity, tier = score(tag, seed)
-        results.append({"hashtag": tag.normalized, "posts": tag.posts, "engagement": tag.engagement, "trend": tag.trend, "related_to": tag.related_to, "opportunity": opportunity, "tier": tier})
-    return sorted(results, key=lambda item: (-item["opportunity"], -item["trend"], item["posts"]))[:limit]
+    for tag in data:
+        searchable = f"{tag.normalized} {tag.related_to}".lower()
+        if minimum <= tag.posts <= maximum and (not seed_words or any(word in searchable for word in seed_words)):
+            opportunity, tier = rank_tag(tag, seed)
+            results.append({"hashtag": tag.normalized, "posts": tag.posts, "engagement": tag.engagement, "trend": tag.trend, "opportunity": opportunity, "tier": tier, "related_to": tag.related_to})
+    return sorted(results, key=lambda row: (-row["opportunity"], -row["trend"], row["posts"]))[:limit]
 
 
-def write_csv(path: Path, results: list[dict]) -> None:
+def save_csv(path: Path, results: list[dict]) -> None:
     fields = ["rank", "hashtag", "posts", "engagement", "trend", "opportunity", "tier", "related_to"]
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
+    with path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fields)
         writer.writeheader()
         for rank, row in enumerate(results, 1):
             writer.writerow({"rank": rank, **row})
 
 
-def write_html(path: Path, results: list[dict], seed: str) -> None:
-    rows = "\n".join(
-        f"<tr><td>{i}</td><td><strong>{html.escape(r['hashtag'])}</strong></td><td>{r['posts']:,}</td><td>{r['engagement']:.1f}%</td><td>{r['trend']:.1f}</td><td><b>{r['opportunity']:.1f}</b></td><td><span class='tier'>{html.escape(r['tier'])}</span></td></tr>"
-        for i, r in enumerate(results, 1)
-    )
-    document = f"""<!doctype html><html><head><meta charset='utf-8'><title>Hashtag research: {html.escape(seed)}</title>
-    <style>body{{font-family:system-ui,sans-serif;max-width:1050px;margin:40px auto;padding:0 20px;color:#172033;background:#f7f8fc}}.card{{background:white;border-radius:16px;padding:26px;box-shadow:0 8px 30px #17203312}}h1{{margin-top:0}}table{{width:100%;border-collapse:collapse;margin-top:20px}}th,td{{padding:13px 10px;text-align:left;border-bottom:1px solid #e7e9ef}}th{{color:#667085;font-size:12px;text-transform:uppercase}}.tier{{background:#eef4ff;border-radius:999px;padding:5px 9px;font-size:12px}}.note{{color:#667085;font-size:14px}}</style></head>
-    <body><div class='card'><h1>Instagram hashtag research</h1><p class='note'>Seed: <b>{html.escape(seed)}</b> · Ranked by opportunity score</p><table><thead><tr><th>#</th><th>Hashtag</th><th>Posts</th><th>Engagement</th><th>Trend</th><th>Score</th><th>Recommendation</th></tr></thead><tbody>{rows}</tbody></table><p class='note'>Scores are directional, not Instagram guarantees. Refresh your metrics regularly.</p></div></body></html>"""
-    path.write_text(document, encoding="utf-8")
+def save_html(path: Path, results: list[dict], seed: str) -> None:
+    rows = "".join(f"<tr><td>{i}</td><td><b>{html.escape(row['hashtag'])}</b></td><td>{row['posts']:,}</td><td>{row['engagement']:.1f}%</td><td>{row['trend']:.1f}</td><td>{row['opportunity']:.1f}</td><td>{html.escape(row['tier'])}</td></tr>" for i, row in enumerate(results, 1))
+    page = f"<!doctype html><meta charset='utf-8'><title>Hashtag research</title><style>body{{font:16px system-ui;max-width:1000px;margin:40px auto;padding:0 20px}}table{{border-collapse:collapse;width:100%}}th,td{{padding:10px;border-bottom:1px solid #ddd;text-align:left}}th{{font-size:12px;text-transform:uppercase}}</style><h1>Hashtag research: {html.escape(seed)}</h1><table><tr><th>#</th><th>Hashtag</th><th>Posts</th><th>Engagement</th><th>Trend</th><th>Score</th><th>Tier</th></tr>{rows}</table>"
+    path.write_text(page, encoding="utf-8")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Research and rank Instagram hashtags from a metrics CSV.")
-    parser.add_argument("seed", help="Topic or seed hashtag, e.g. 'street photography'")
-    parser.add_argument("--data", type=Path, default=Path(__file__).with_name("sample_hashtags.csv"), help="Input CSV with hashtag metrics")
-    parser.add_argument("--min-posts", type=int, default=1_000, help="Minimum post count")
-    parser.add_argument("--max-posts", type=int, default=5_000_000, help="Maximum post count")
-    parser.add_argument("--limit", type=int, default=30, help="Number of results")
-    parser.add_argument("--output", type=Path, default=Path("hashtag_results.csv"), help="CSV output path")
-    parser.add_argument("--html", type=Path, default=Path("hashtag_results.html"), help="HTML report path")
+    parser = argparse.ArgumentParser(description="Rank Instagram hashtags by opportunity.")
+    parser.add_argument("seed", help="Topic or seed hashtag, for example: street photography")
+    parser.add_argument("--data", type=Path, help="Optional authorized CSV: hashtag,posts,engagement,trend,related_to")
+    parser.add_argument("--min-posts", type=int, default=1_000)
+    parser.add_argument("--max-posts", type=int, default=5_000_000)
+    parser.add_argument("--limit", type=int, default=30)
+    parser.add_argument("--output", type=Path, default=Path("hashtag_results.csv"))
+    parser.add_argument("--html", type=Path, default=Path("hashtag_results.html"))
     args = parser.parse_args()
 
     try:
-        rows = load_csv(args.data)
-        results = research(rows, args.seed, args.min_posts, args.max_posts, args.limit)
-    except (OSError, ValueError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        data = load_csv(args.data) if args.data else DEMO_DATA
+        results = research(data, args.seed, args.min_posts, args.max_posts, args.limit)
+    except (OSError, ValueError) as error:
+        print(f"Error: {error}", file=sys.stderr)
         return 2
     if not results:
-        print("No matching hashtags. Try a broader seed or wider post-count range.")
+        print("No matching hashtags. Try a broader topic or wider post-count range.")
         return 0
-    write_csv(args.output, results)
-    write_html(args.html, results, args.seed)
+
+    save_csv(args.output, results)
+    save_html(args.html, results, args.seed)
     print(f"Found {len(results)} hashtags for '{args.seed}'\n")
     print(f"{'#':>3}  {'HASHTAG':<28} {'POSTS':>12} {'ENG%':>6} {'TREND':>6} {'SCORE':>6}  TIER")
-    print("-" * 80)
-    for i, row in enumerate(results, 1):
-        print(f"{i:>3}  {row['hashtag']:<28} {row['posts']:>12,} {row['engagement']:>6.1f} {row['trend']:>6.1f} {row['opportunity']:>6.1f}  {row['tier']}")
+    print("-" * 82)
+    for index, row in enumerate(results, 1):
+        print(f"{index:>3}  {row['hashtag']:<28} {row['posts']:>12,} {row['engagement']:>6.1f} {row['trend']:>6.1f} {row['opportunity']:>6.1f}  {row['tier']}")
     print(f"\nSaved: {args.output} and {args.html}")
     return 0
 
