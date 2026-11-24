@@ -1,4 +1,4 @@
-# Instagram Hashtag Research Tool
+# Instagram Hashtag Research Tool.
 
 A standalone Python program that ranks Instagram hashtags by estimated opportunity using engagement, trend, relevance, post volume, and saturation.
 
